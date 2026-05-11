@@ -155,6 +155,12 @@ if not df.empty:
     if selected_report != "All":
         filtered_df = filtered_df[filtered_df['Report ID'] == selected_report]
         
+    auth_statuses = ["All"] + list(filtered_df['Auth Status'].unique())
+    selected_status = st.sidebar.selectbox("Filter by Auth Status", auth_statuses)
+    
+    if selected_status != "All":
+        filtered_df = filtered_df[filtered_df['Auth Status'] == selected_status]
+        
     # Metrics Section
     st.subheader("📈 Summary Metrics")
     total_emails = filtered_df['Count'].sum()
