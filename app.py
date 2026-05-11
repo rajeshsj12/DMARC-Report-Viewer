@@ -15,24 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for a clean, premium look
-st.markdown("""
-<style>
-    .main {
-        background-color: #f8f9fa;
-    }
-    .stMetric {
-        background-color: white;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        box-shadow: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.15);
-        border-left: 0.25rem solid #4e73df;
-    }
-    h1, h2, h3 {
-        color: #1a1c20;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Custom CSS removed to support native dark/light modes
 
 st.title("🛡️ DMARC Report Analyzer")
 st.markdown("Upload DMARC aggregate reports to parse and combine them.")
@@ -139,6 +122,24 @@ else:
     files_count = 0
 
 if not df.empty:
+    # Helper to determine action
+    def get_action(row):
+        spf = row['SPF Eval']
+        dkim = row['DKIM Eval']
+        disp = row['Disposition']
+        if spf == 'pass' and dkim == 'pass':
+            return "Legitimate Source. No action needed."
+        elif spf == 'pass' or dkim == 'pass':
+            return "Partial Pass. Check alignment or forwarding."
+        else:
+            if disp in ['quarantine', 'reject']:
+                return "Spoofing blocked. No action needed."
+            return "Potential Spoofing. Investigate source IP."
+
+    # Add columns for analysis
+    df['Auth Status'] = df.apply(lambda r: f"SPF {r['SPF Eval'].upper()} / DKIM {r['DKIM Eval'].upper()}", axis=1)
+    df['Recommended Action'] = df.apply(get_action, axis=1)
+
     # Sidebar filters
     st.sidebar.header("Filters")
     orgs = ["All"] + list(df['Org Name'].unique())
@@ -154,7 +155,8 @@ if not df.empty:
     if selected_report != "All":
         filtered_df = filtered_df[filtered_df['Report ID'] == selected_report]
         
-    # Metrics
+    # Metrics Section
+    st.subheader("📈 Summary Metrics")
     total_emails = filtered_df['Count'].sum()
     unique_ips = filtered_df['Source IP'].nunique()
     
@@ -172,47 +174,71 @@ if not df.empty:
     with col4:
         st.metric("Reports Processed", f"{files_count}")
 
-    # Show Published Policy
-    st.subheader("📋 Published Policy")
-    if selected_report != "All" and not filtered_df.empty:
-        report_data = filtered_df.iloc[0]
-        col_p1, col_p2, col_p3, col_p4, col_p5, col_p6 = st.columns(6)
-        col_p1.metric("Domain", report_data['Policy Domain'])
-        col_p2.metric("adkim", report_data['Policy adkim'])
-        col_p3.metric("aspf", report_data['Policy aspf'])
-        col_p4.metric("p", report_data['Policy p'])
-        col_p5.metric("sp", report_data['Policy sp'])
-        col_p6.metric("pct", report_data['Policy pct'])
-    else:
-        st.info("Select a specific Report ID from the sidebar to view its published policy.")
-
-    # Layout
-    col_left, col_right = st.columns([2, 1])
+    # Actionable Summary (Minimal Report) - AT TOP
+    st.subheader("🎯 Actionable Summary")
+    st.markdown("Minimal report showing only sources that need attention or have high volume.")
     
-    with col_left:
-        st.subheader("📋 Combined Report Data")
-        st.dataframe(filtered_df, use_container_width=True)
-        
-    with col_right:
-        st.subheader("📊 Top Sources")
+    summary_df = filtered_df.groupby(['Source IP', 'Auth Status', 'Disposition', 'Override Reason', 'Recommended Action'])['Count'].sum().reset_index().sort_values(by='Count', ascending=False)
+    
+    def get_indicator(auth_status):
+        if "PASS" in auth_status and "FAIL" in auth_status:
+            return "🟡 PARTIAL"
+        elif "PASS" in auth_status:
+            return "🟢 PASS"
+        else:
+            return "🔴 FAIL"
+            
+    summary_df['Status'] = summary_df['Auth Status'].apply(get_indicator)
+    
+    # Reorder columns to show important info first
+    display_cols = ['Status', 'Source IP', 'Count', 'Auth Status', 'Disposition', 'Override Reason', 'Recommended Action']
+    st.dataframe(summary_df[display_cols], use_container_width=True, hide_index=True)
+
+    # Published Policy Section
+    with st.expander("📋 View Published Policy"):
+        if not filtered_df.empty:
+            report_data = filtered_df.iloc[0]
+            col_p1, col_p2, col_p3, col_p4, col_p5, col_p6 = st.columns(6)
+            col_p1.metric("Domain", report_data['Policy Domain'])
+            col_p2.metric("adkim", report_data['Policy adkim'])
+            col_p3.metric("aspf", report_data['Policy aspf'])
+            col_p4.metric("p", report_data['Policy p'])
+            col_p5.metric("sp", report_data['Policy sp'])
+            col_p6.metric("pct", report_data['Policy pct'])
+        else:
+            st.info("No data available to display policy.")
+
+    # Visuals Section (Side-by-Side)
+    st.subheader("📊 Visual Analytics")
+    col_chart1, col_chart2 = st.columns(2)
+    
+    with col_chart1:
+        # Top Sources Bar Chart
         ip_summary = filtered_df.groupby('Source IP')['Count'].sum().reset_index().sort_values(by='Count', ascending=False).head(10)
         fig_ip = px.bar(ip_summary, x='Source IP', y='Count', title='Top 10 Sending IPs',
                         labels={'Count': 'Email Count', 'Source IP': 'IP Address'},
-                        color='Count', color_continuous_scale='Viridis')
+                        color='Count', color_continuous_scale='Sunset')
         st.plotly_chart(fig_ip, use_container_width=True)
         
-        st.subheader("🛡️ Policy Disposition")
-        disp_summary = filtered_df.groupby('Disposition')['Count'].sum().reset_index()
-        fig_disp = px.pie(disp_summary, values='Count', names='Disposition', title='Disposition Breakdown',
-                          color_discrete_sequence=px.colors.sequential.RdBu)
-        st.plotly_chart(fig_disp, use_container_width=True)
+    with col_chart2:
+        # Auth Status Breakdown
+        auth_counts = filtered_df.groupby('Auth Status')['Count'].sum().reset_index()
+        fig_auth = px.bar(auth_counts, x='Auth Status', y='Count', title='Authentication Status Volume',
+                          labels={'Count': 'Email Count', 'Auth Status': 'Status'},
+                          color='Auth Status', color_discrete_sequence=px.colors.qualitative.Plotly)
+        st.plotly_chart(fig_auth, use_container_width=True)
 
-    # Detailed breakdown
-    st.subheader("🔍 Authentication Breakdown & Overrides")
+    # Full Report in Expander - AT BOTTOM
+    with st.expander("📋 View Full Combined Report"):
+        st.markdown("Detailed view of all records parsed from the reports.")
+        st.dataframe(filtered_df, use_container_width=True)
+
+    # Detailed breakdown (Side-by-Side)
+    st.subheader("🔍 Detailed Breakdowns")
     col_breakdown1, col_breakdown2 = st.columns(2)
     
     with col_breakdown1:
-        st.markdown("**SPF & DKIM Results**")
+        st.markdown("**SPF & DKIM Raw Combinations**")
         auth_summary = filtered_df.groupby(['SPF Eval', 'DKIM Eval'])['Count'].sum().reset_index()
         st.dataframe(auth_summary, use_container_width=True, hide_index=True)
         
