@@ -239,6 +239,26 @@ if not df.empty:
         st.markdown("Detailed view of all records parsed from the reports.")
         st.dataframe(filtered_df, use_container_width=True)
 
+    with st.expander("📄 View Raw XML"):
+        for file in uploaded_files:
+            st.markdown(f"**File: {file.name}**")
+            file.seek(0) # Reset file pointer for reading again
+            if file.name.endswith('.xml.gz') or file.name.endswith('.gz'):
+                try:
+                    with gzip.GzipFile(fileobj=file) as f:
+                        st.code(f.read().decode('utf-8'), language='xml')
+                except Exception as e:
+                    st.error(f"Error reading {file.name}: {e}")
+            elif file.name.endswith('.zip'):
+                try:
+                    with zipfile.ZipFile(file) as z:
+                        for name in z.namelist():
+                            if name.endswith('.xml'):
+                                with z.open(name) as f:
+                                    st.code(f.read().decode('utf-8'), language='xml')
+                except Exception as e:
+                    st.error(f"Error reading {file.name}: {e}")
+
     # Detailed breakdown (Side-by-Side)
     st.subheader("🔍 Detailed Breakdowns")
     col_breakdown1, col_breakdown2 = st.columns(2)
